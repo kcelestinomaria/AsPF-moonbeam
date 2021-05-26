@@ -1,0 +1,136 @@
+// A contract to deploy the other contracts
+
+
+pragma solidity >=0.5.15 <0.6.0;
+
+
+import { ShelfFabLike, CollectorFabLike, PileFabLike, TitleFabLike } from "./fabs/interfaces.sol";
+import { FixedPoint } from "./../fixed_point.sol";
+
+
+interface DependLike {
+    function depend(bytes32, address) external;
+}
+
+interface AuthLike {
+    function rely(address) external;
+    function deny(address) external;
+}
+
+interface NFTFeedLike {
+    function init() external;
+}
+
+interface FeedFabLike {
+    function newFeed() external returns(address);
+}
+
+
+interface FileLike {
+    function file(bytes32 name, uint value) external;
+}
+
+contract BorrowerDeployer is FixedPoint {
+    address      public root;
+
+    TitleFabLike     public titlefab;
+    ShelfFabLike     public shelffab;
+    PileFabLike      public pilefab;
+    CollectorFabLike public collectorFab;
+    FeedFabLike      public feedFab;
+
+    address public title;
+    address public shelf;
+    address public pile;
+    address public collector;
+    address public currency;
+    address public feed;
+
+    string  public titleName;
+    string  public titleSymbol;
+    Fixed27 public discountRate;
+
+    address constant ZERO = address(0);
+
+    constructor (
+      address root_,
+      address titlefab_,
+      address shelffab_,
+      address pilefab_,
+      address collectorFab_,
+      address feedFab_,
+      address currency_,
+      string memory titleName_,
+      string memory titleSymbol_,
+      uint discountRate_
+    ) public {
+        root = root_;
+
+        titlefab = TitleFabLike(titlefab_);
+        shelffab = ShelfFabLike(shelffab_);
+
+        pilefab = PileFabLike(pilefab_);
+        collectorFab = CollectorFabLike(collectorFab_);
+        feedFab = FeedFabLike(feedFab_);
+
+        currency = currency_;
+
+        titleName = titleName_;
+        titleSymbol = titleSymbol_;
+        discountRate = Fixed27(discountRate_);
+    }
+
+    function deployCollector() public {
+        require(collector == ZERO && address(shelf) != ZERO);
+        collector = collectorFab.newCollector(address(shelf), address(pile), address(feed));
+        AuthLike(collector).rely(root);
+    }
+
+    function deployPile() public {
+        require(pile == ZERO);
+        pile = pilefab.newPile();
+        AuthLike(pile).rely(root);
+    }
+
+    function deployTitle() public {
+        require(title == ZERO);
+        title = titlefab.newTitle(titleName, titleSymbol);
+        AuthLike(title).rely(root);
+    }
+
+    function deployShelf() public {
+        require(shelf == ZERO && title != ZERO && pile != ZERO && feed != ZERO);
+        shelf = shelffab.newShelf(currency, address(title), address(pile), address(feed));
+        AuthLike(shelf).rely(root);
+    }
+
+    function deployFeed() public {
+        feed = feedFab.newFeed();
+        AuthLike(feed).rely(root);
+    }
+
+    function deploy() public {
+        // ensures all required deploy methods were called
+        require(shelf != ZERO && collector != ZERO);
+
+        // shelf allowed to call
+        AuthLike(pile).rely(shelf);
+
+        DependLike(feed).depend("shelf", address(shelf));
+        DependLike(feed).depend("pile", address(pile));
+
+        // allow nftFeed to update rate groups
+        AuthLike(pile).rely(feed);
+        NFTFeedLike(feed).init();
+
+        DependLike(shelf).depend("subscriber", address(feed));
+
+        AuthLike(feed).rely(shelf);
+        AuthLike(title).rely(shelf);
+
+        // collector allowed to call
+        AuthLike(shelf).rely(collector);
+
+        FileLike(feed).file("discountRate", discountRate.value);
+    }
+}
